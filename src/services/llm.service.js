@@ -635,97 +635,51 @@ Remember: Be intelligent about filtering - only provide detailed responses when 
   }
 
   async executeRequest(geminiRequest) {
-    const maxRetries = config.get('llm.gemini.maxRetries');
     const timeout = config.get('llm.gemini.timeout');
-    
-    // Add request debugging
+
     logger.debug('Executing Gemini request', {
-      hasModel: !!this.model,
-      hasClient: !!this.client,
-      requestKeys: Object.keys(geminiRequest),
-      timeout,
-      maxRetries,
-      nodeVersion: process.version,
-      platform: process.platform
+        hasModel: !!this.model,
+        hasClient: !!this.client,
+        requestKeys: Object.keys(geminiRequest),
+        timeout,
+        nodeVersion: process.version,
+        platform: process.platform
     });
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        // Pre-flight check
-        await this.performPreflightCheck();
-        
+
+    try {
         const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Request timeout')), timeout)
+            setTimeout(() => reject(new Error('Request timeout')), timeout)
         );
-        
-        logger.debug(`Gemini API attempt ${attempt} starting`, {
-          timestamp: new Date().toISOString(),
-          timeout
+
+        logger.debug('Gemini API request starting', {
+            timestamp: new Date().toISOString(),
+            timeout
         });
-        
+
         const requestPromise = this.model.generateContent(geminiRequest);
         const result = await Promise.race([requestPromise, timeoutPromise]);
-        
+
         if (!result.response) {
-          throw new Error('Empty response from Gemini API');
+            throw new Error('Empty response from Gemini API');
         }
 
         const responseText = result.response.text();
-        
+
         if (!responseText || responseText.trim().length === 0) {
-          throw new Error('Empty text content in Gemini response');
+            throw new Error('Empty text content in Gemini response');
         }
 
         logger.debug('Gemini API request successful', {
-          attempt,
-          responseLength: responseText.length
+            responseLength: responseText.length
         });
 
         return responseText.trim();
-      } catch (error) {
-        const errorInfo = this.analyzeError(error);
-        
-        // Enhanced error logging for fetch failures
-        if (errorInfo.type === 'NETWORK_ERROR') {
-          logger.error('Network error details', {
-            attempt,
-            errorMessage: error.message,
-            errorStack: error.stack,
-            errorName: error.name,
-            nodeEnv: process.env.NODE_ENV,
-            electronVersion: process.versions.electron,
-            chromeVersion: process.versions.chrome,
-            nodeVersion: process.versions.node,
-            userAgent: this.getUserAgent()
-          });
-        }
-        
-        logger.warn(`Gemini API attempt ${attempt} failed`, {
-          error: error.message,
-          errorType: errorInfo.type,
-          isNetworkError: errorInfo.isNetworkError,
-          suggestedAction: errorInfo.suggestedAction,
-          remainingAttempts: maxRetries - attempt
+    } catch (error) {
+        logger.error('Gemini API request failed', {
+            error: error.message,
+            errorStack: error.stack
         });
-
-        if (attempt === maxRetries) {
-          const finalError = new Error(`Gemini API failed after ${maxRetries} attempts: ${error.message}`);
-          finalError.errorAnalysis = errorInfo;
-          finalError.originalError = error;
-          throw finalError;
-        }
-
-        // Use exponential backoff with jitter for network errors
-        const baseDelay = errorInfo.isNetworkError ? 2000 : 1000;
-        const delay = baseDelay * attempt + Math.random() * 1000;
-        
-        logger.debug(`Waiting ${delay}ms before retry ${attempt + 1}`, {
-          baseDelay,
-          isNetworkError: errorInfo.isNetworkError
-        });
-        
-        await this.delay(delay);
-      }
+        throw error;
     }
   }
 

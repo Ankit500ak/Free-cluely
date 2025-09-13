@@ -384,7 +384,9 @@ class SpeechService extends EventEmitter {
     this.pushStream = null;
     this.recording = null;
     this.available = false; // track availability
-    
+    this.useWebSpeech = false; // fallback to Web Speech API
+    this.webSpeechService = null;
+
     this.initializeClient();
   }
 
@@ -395,10 +397,9 @@ class SpeechService extends EventEmitter {
       const region = process.env.AZURE_SPEECH_REGION;
       
       if (!subscriptionKey || !region) {
-        const reason = 'Azure Speech credentials not found. Speech recognition disabled.';
-        logger.warn('Speech service disabled (missing credentials)');
-        this.available = false;
-        this.emit('status', reason);
+        // Fallback to Web Speech API
+        logger.info('Azure Speech credentials not found. Falling back to Web Speech API');
+        this.initializeWebSpeech();
         return;
       }
 
@@ -436,10 +437,37 @@ class SpeechService extends EventEmitter {
       });
       
       this.available = true;
+      this.useWebSpeech = false;
       this.emit('status', 'Azure Speech Services ready');
       
     } catch (error) {
       logger.error('Failed to initialize Azure Speech client', { error: error.message, stack: error.stack });
+      logger.info('Falling back to Web Speech API');
+      this.initializeWebSpeech();
+    }
+  }
+
+  initializeWebSpeech() {
+    try {
+      // Initialize Web Speech API service
+      this.webSpeechService = require('./web-speech.service');
+      
+      // Forward events from Web Speech service
+      this.webSpeechService.on('transcription', (text) => this.emit('transcription', text));
+      this.webSpeechService.on('interim-transcription', (text) => this.emit('interim-transcription', text));
+      this.webSpeechService.on('recording-started', () => this.emit('recording-started'));
+      this.webSpeechService.on('recording-stopped', () => this.emit('recording-stopped'));
+      this.webSpeechService.on('error', (error) => this.emit('error', error));
+      this.webSpeechService.on('status', (status) => this.emit('status', status));
+      
+      this.available = true;
+      this.useWebSpeech = true;
+      
+      logger.info('Web Speech API service initialized as fallback');
+      this.emit('status', 'Web Speech API ready (free alternative)');
+      
+    } catch (error) {
+      logger.error('Failed to initialize Web Speech API fallback', { error: error.message });
       this.available = false;
       this.emit('status', 'Speech recognition unavailable');
     }
@@ -447,6 +475,26 @@ class SpeechService extends EventEmitter {
 
   startRecording() {
     try {
+      logger.info('🎤 SPEECH: Start recording requested', { 
+        useWebSpeech: this.useWebSpeech, 
+        hasWebSpeechService: !!this.webSpeechService,
+        isRecording: this.isRecording,
+        hasSpeechConfig: !!this.speechConfig
+      });
+
+      if (this.isRecording) {
+        logger.warn('Recording already in progress');
+        return;
+      }
+
+      // Use Web Speech API if available
+      if (this.useWebSpeech && this.webSpeechService) {
+        logger.info('🎤 SPEECH: Using Web Speech API for recording');
+        this.isRecording = true;
+        this.webSpeechService.startRecording();
+        return;
+      }
+
       if (!this.speechConfig) {
         const errorMsg = 'Azure Speech client not initialized';
         logger.error(errorMsg);
@@ -454,11 +502,7 @@ class SpeechService extends EventEmitter {
         return;
       }
 
-      if (this.isRecording) {
-        logger.warn('Recording already in progress');
-        return;
-      }
-
+      logger.info('🎤 SPEECH: Using Azure Speech for recording');
       this.sessionStartTime = Date.now();
       this.retryCount = 0;
 
@@ -650,7 +694,22 @@ class SpeechService extends EventEmitter {
   }
 
   stopRecording() {
+    if (this.useVosk && this.recording) {
+      this.recording.stop();
+      this.isRecording = false;
+      this.emit('recording-stopped');
+      logger.info('Vosk recording stopped');
+      return;
+    }
+
     if (!this.isRecording) {
+      return;
+    }
+
+    // Use Web Speech API if available
+    if (this.useWebSpeech && this.webSpeechService) {
+      this.isRecording = false;
+      this.webSpeechService.stopRecording();
       return;
     }
 
@@ -817,12 +876,20 @@ class SpeechService extends EventEmitter {
   }
 
   getStatus() {
+    if (this.useWebSpeech && this.webSpeechService) {
+      return {
+        ...this.webSpeechService.getStatus(),
+        type: 'Web Speech API (free alternative)'
+      };
+    }
+
     return {
       isRecording: this.isRecording,
       isInitialized: !!this.speechConfig,
       sessionDuration: this.sessionStartTime ? Date.now() - this.sessionStartTime : 0,
       retryCount: this.retryCount,
-      config: config.get('speech.azure') || {}
+      config: config.get('speech.azure') || {},
+      type: 'Azure Speech Service'
     };
   }
 
@@ -971,7 +1038,17 @@ class SpeechService extends EventEmitter {
 
   // Expose availability to UI
   isAvailable() {
+    if (this.useWebSpeech && this.webSpeechService) {
+      return this.webSpeechService.isAvailable();
+    }
     return !!this.speechConfig && !!this.available;
+  }
+
+  // Handle messages from renderer process (for Web Speech API)
+  handleRendererMessage(event, data) {
+    if (this.useWebSpeech && this.webSpeechService) {
+      this.webSpeechService.handleRendererMessage(event, data);
+    }
   }
 }
 

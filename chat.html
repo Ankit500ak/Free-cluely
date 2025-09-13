@@ -1146,15 +1146,19 @@
       if (whysperAPI) {
         whysperAPI.onTranscriptionReceived((event, data) => {
           if (data && data.text) {
+            console.log('Transcription received:', data.text);
             handleTranscription(data.text);
           } else {
-            console.warn('Invalid transcription data received:', data);
+            console.warn('No transcription data received:', data);
           }
         });
 
         whysperAPI.onInterimTranscription((event, data) => {
           if (data && data.text) {
+            console.log('Interim transcription:', data.text);
             showInterimText(data.text);
+          } else {
+            console.warn('No interim transcription data received:', data);
           }
         });
 
@@ -1174,17 +1178,38 @@
         // Listen for speech errors
         whysperAPI.onSpeechError((event, data) => {
           if (data && data.error) {
-            addMessage(`Error in recognizing speech`, 'error');
+            console.error('Speech recognition error details:', data.error); // Enhanced logging
+
+            try {
+              // Attempt to parse JSON or extract relevant fields from data.error.
+              const errorDetails = typeof data.error === 'string' ? JSON.parse(data.error) : data.error;
+              console.error('Extracted Error Details:', errorDetails);
+            } catch (e) {
+              console.error('Error parsing error details:', e.message);
+            }
+
+            // Fallback to Azure Speech SDK if Web Speech API fails.
+            const audioData = 'Your audio data here'; // Replace with actual audio data.
+            whysperAPI.useAzureSpeechSDK(audioData)
+              .then((recognizedText) => {
+                console.log('Fallback result:', recognizedText);
+              })
+              .catch((fallbackError) => {
+                console.error('Azure Speech SDK fallback error:', fallbackError);
+              });
+
             handleRecordingStopped();
           }
         });
 
         // Listen for other events
         whysperAPI.onRecordingStarted(() => {
+          console.log('Recording started: Microphone is now active.');
           handleRecordingStarted();
         });
 
         whysperAPI.onRecordingStopped(() => {
+          console.log('Recording stopped: Microphone is now inactive.');
           handleRecordingStopped();
         });
 

@@ -5,6 +5,7 @@ class ConfigManager {
   constructor() {
     this.env = process.env.NODE_ENV || 'development';
     this.appDataDir = path.join(os.homedir(), '.OpenCluely');
+    this.cacheDir = path.join(this.appDataDir, 'cache');
     this.loadConfiguration();
   }
 
@@ -15,6 +16,7 @@ class ConfigManager {
         version: '1.0.0',
         processTitle: 'OpenCluely',
         dataDir: this.appDataDir,
+        cacheDir: this.cacheDir,
         isDevelopment: this.env === 'development',
         isProduction: this.env === 'production'
       },
@@ -28,7 +30,10 @@ class ConfigManager {
           nodeIntegration: false,
           contextIsolation: true,
           enableRemoteModule: false,
-          preload: path.join(__dirname, '../../preload.js')
+          preload: path.join(__dirname, '../../preload.js'),
+          webSecurity: false, // Allow microphone access
+          allowRunningInsecureContent: true, // For Web Speech API
+          experimentalFeatures: true // Enable experimental web features
         }
       },
 

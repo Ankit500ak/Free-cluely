@@ -7,12 +7,101 @@ const logger = {
 };
 
 class MainWindowUI {
+    // --- READ BUTTON: Pure OCR extraction and display ---
+    async readScreenAndShowText() {
+        try {
+            this.showProcessingIndicator('Reading text from screen...');
+                // Request main process to capture screenshot and extract text (OCR only)
+                    const ocrRequestOptions = {
+                        skill: 'text',
+                        scaleMultiplier: 2, // capture at higher resolution for better OCR
+                        ocr: {
+                            psm: '3', // fully automatic page segmentation
+                            retryPsm: '6', // fallback to single block if needed
+                            minConfidence: 65
+                        }
+                    };
+                    const result = await (window.electronAPI.takeScreenshot ? window.electronAPI.takeScreenshot(ocrRequestOptions) : window.electronAPI.invoke && window.electronAPI.invoke('take-screenshot', ocrRequestOptions));
+            this.hideProcessingIndicator();
+            // Always show in a styled, copyable box
+            this.showScreenTextResult(result && result.response ? result.response : 'No text detected or extraction failed.');
+        } catch (err) {
+            this.hideProcessingIndicator();
+            this.showScreenTextResult('Error extracting text: ' + (err?.message || err));
+        }
+    }
+    // --- TEXT MODE: Capture screenshot, send to API, and display extracted text ---
+    async captureAndShowScreenText() {
+        try {
+            this.showProcessingIndicator('Extracting text from screen...');
+                // Request main process to capture screenshot and process with text skill
+                const ocrOptions = { numeric: true, emojiPreserve: true, psm: 6, whitelist: null };
+                const result = await (window.electronAPI.takeScreenshot ? window.electronAPI.takeScreenshot({ skill: 'text', ocr: ocrOptions }) : window.electronAPI.invoke && window.electronAPI.invoke('take-screenshot', { skill: 'text', ocr: ocrOptions }));
+            // Expect result: { response: string, metadata: object, skill: 'text' }
+            this.hideProcessingIndicator();
+            if (result && result.response) {
+                this.showScreenTextResult(result.response);
+            } else {
+                this.showScreenTextResult('No text detected or extraction failed.');
+            }
+        } catch (err) {
+            this.hideProcessingIndicator();
+            this.showScreenTextResult('Error extracting text: ' + (err?.message || err));
+        }
+    }
+
+    showScreenTextResult(text) {
+        let textBox = document.getElementById('screenTextBox');
+        if (!textBox) {
+            textBox = document.createElement('div');
+            textBox.id = 'screenTextBox';
+            textBox.style.width = '90vw';
+            textBox.style.margin = '24px auto 0 auto';
+            textBox.style.background = '#181818';
+            textBox.style.color = '#fff';
+            textBox.style.padding = '24px';
+            textBox.style.borderRadius = '10px';
+            textBox.style.fontSize = '16px';
+            textBox.style.boxShadow = '0 4px 24px rgba(0,0,0,0.18)';
+            textBox.style.maxHeight = '40vh';
+            textBox.style.overflowY = 'auto';
+            textBox.style.whiteSpace = 'pre-wrap';
+            document.body.insertBefore(textBox, document.body.children[1]);
+        }
+        textBox.innerHTML = '';
+        // Add prompt/label for text mode
+        const label = document.createElement('div');
+        label.innerText = 'Text Mode: The data below is extracted from your screen (word-for-word, line-by-line):';
+        label.style.fontWeight = 'bold';
+        label.style.marginBottom = '16px';
+        label.style.fontSize = '15px';
+        label.style.color = '#a3e635';
+        textBox.appendChild(label);
+        const textContent = document.createElement('div');
+        textContent.innerText = text || 'No visible text found.';
+        textBox.appendChild(textContent);
+        // Add copy button
+        const copyBtn = document.createElement('button');
+        copyBtn.innerText = 'Copy Text';
+        copyBtn.style.marginTop = '18px';
+        copyBtn.style.padding = '8px 24px';
+        copyBtn.style.background = '#444';
+        copyBtn.style.color = '#fff';
+        copyBtn.style.border = 'none';
+        copyBtn.style.borderRadius = '6px';
+        copyBtn.style.cursor = 'pointer';
+        copyBtn.onclick = () => this.copyScreenTextToClipboard(text);
+        textBox.appendChild(copyBtn);
+        textBox.style.display = 'block';
+    }
+    
     constructor() {
         this.isInteractive = false;
         this.isHidden = false;
         this.currentSkill = 'dsa'; // Default, will be updated from settings
         this.statusDot = null;
-        this.skillIndicator = null;
+        this.skillSelector = null;
+        this.skillSelect = null;
         this.micButton = null;
         this.isRecording = false;
         this.speechAvailable = false; // track availability
@@ -20,7 +109,10 @@ class MainWindowUI {
         
         // Define available skills for navigation
         this.availableSkills = [
-            'dsa'
+            'dsa',
+            'mcq',
+            'rephrase',
+            'text'
         ];
         
         this.init();
@@ -30,6 +122,7 @@ class MainWindowUI {
         try {
             this.setupElements();
             this.setupEventListeners();
+            this.setupIPC();
             
             // Load current skill from settings
             await this.loadCurrentSkill();
@@ -40,7 +133,7 @@ class MainWindowUI {
             // Fetch speech availability
             await this.loadSpeechAvailability();
             
-            this.updateSkillIndicator();
+            this.updateSkillSelector();
             this.updateAllElementStates(); // Update all elements with current state
             this.resizeWindowToContent();
             
@@ -57,6 +150,109 @@ class MainWindowUI {
             });
         }
     }
+
+    setupIPC() {
+        // Listen for messages from the main process for voice processing feedback
+        if (window.electronAPI && window.electronAPI.onMainMessage) {
+            window.electronAPI.onMainMessage((event, data) => {
+                switch (event) {
+                    case 'voice-question-processing':
+                        this.handleVoiceQuestionProcessing(data);
+                        break;
+                    case 'voice-answer-ready':
+                        this.handleVoiceAnswerReady(data);
+                        break;
+                    case 'web-speech-started':
+                        this.handleWebSpeechStarted();
+                        break;
+                    case 'web-speech-stopped':
+                        this.handleWebSpeechStopped();
+                        break;
+                    case 'web-speech-final':
+                        this.handleWebSpeechFinal(data);
+                        break;
+                    case 'web-speech-interim':
+                        this.handleWebSpeechInterim(data);
+                        break;
+                    case 'web-speech-error':
+                        this.handleWebSpeechError(data);
+                        break;
+                }
+            });
+        }
+    }
+
+    handleVoiceQuestionProcessing(data) {
+        logger.info('🚀 Voice question processing started', data);
+        this.showProcessingIndicator(data.text);
+    }
+
+    handleVoiceAnswerReady(data) {
+        logger.info('✅ Voice answer ready', data);
+        this.hideProcessingIndicator();
+        this.showAnswerReady();
+    }
+
+    handleWebSpeechStarted() {
+        logger.info('🎤 Web Speech started');
+        this.isRecording = true;
+        this.updateMicButtonState();
+    }
+
+    handleWebSpeechStopped() {
+        logger.info('🔇 Web Speech stopped');
+        this.isRecording = false;
+        this.updateMicButtonState();
+    }
+
+    handleWebSpeechFinal(data) {
+        logger.info('📝 Web Speech final result:', data.text);
+        // Could show final transcription in UI
+    }
+
+    handleWebSpeechInterim(data) {
+        logger.debug('💭 Web Speech interim result:', data.text);
+        // Could show live transcription in UI
+    }
+
+    handleWebSpeechError(data) {
+        logger.error('❌ Web Speech error:', data.error);
+        this.isRecording = false;
+        this.updateMicButtonState();
+        this.showNotification(`Speech error: ${data.error}`, 'error');
+    }
+
+    showProcessingIndicator(questionText) {
+        // Add blinking effect to show processing
+        if (this.micButton) {
+            this.micButton.classList.add('processing');
+        }
+        
+        // Show processing notification
+        this.showNotification(`🤖 AI analyzing: "${questionText.substring(0, 30)}..."`, 'info');
+    }
+
+    hideProcessingIndicator() {
+        // Remove processing effect
+        if (this.micButton) {
+            this.micButton.classList.remove('processing');
+        }
+    }
+
+    showAnswerReady() {
+        // Show success notification
+        this.showNotification('✅ Answer ready! Check results window.', 'success');
+        
+        // Brief flash effect
+        if (this.micButton) {
+            this.micButton.classList.add('success-flash');
+            setTimeout(() => {
+                this.micButton.classList.remove('success-flash');
+            }, 1000);
+        }
+    }
+
+    
 
     async loadCurrentSkill() {
         try {
@@ -115,10 +311,17 @@ class MainWindowUI {
 
     applyMicVisibility() {
         if (this.micButton) {
+            // Always show microphone button, but indicate availability through styling
+            this.micButton.style.display = '';
+            
             if (this.speechAvailable) {
-                this.micButton.style.display = '';
+                this.micButton.style.opacity = '1';
+                this.micButton.title = '🎤 Voice recognition ready! Click to ask questions';
+                this.micButton.classList.remove('speech-disabled');
             } else {
-                this.micButton.style.display = 'none';
+                this.micButton.style.opacity = '0.5';
+                this.micButton.title = '🎤 Speech recognition loading... Please wait';
+                this.micButton.classList.add('speech-disabled');
             }
             // Resize to reflect layout change
             setTimeout(() => this.resizeWindowToContent(), 50);
@@ -128,7 +331,7 @@ class MainWindowUI {
     updateAllElementStates() {
         // Update all interactive elements with current state
         this.updateStatusDot();
-        this.updateSkillIndicatorState();
+        this.updateSkillSelectorState();
         this.updateMicButtonState();
         this.updateSettingsIndicatorState();
     }
@@ -161,25 +364,27 @@ class MainWindowUI {
         }
     }
 
-    updateSkillIndicatorState() {
-        if (this.skillIndicator) {
+    updateSkillSelectorState() {
+        if (this.skillSelector) {
             // Remove both classes first
-            this.skillIndicator.classList.remove('interactive', 'non-interactive');
+            this.skillSelector.classList.remove('interactive', 'non-interactive');
             
             // Add the appropriate class
             if (this.isInteractive) {
-                this.skillIndicator.classList.add('interactive');
+                this.skillSelector.classList.add('interactive');
             } else {
-                this.skillIndicator.classList.add('non-interactive');
+                this.skillSelector.classList.add('non-interactive');
             }
             
-            logger.debug('Skill indicator state updated', {
+            logger.debug('Skill selector state updated', {
                 component: 'MainWindowUI',
                 interactive: this.isInteractive,
-                classes: this.skillIndicator.className
+                classes: this.skillSelector.className
             });
         }
     }
+
+
 
     updateMicButtonState() {
         if (this.micButton) {
@@ -255,18 +460,18 @@ class MainWindowUI {
     }
 
     setupElements() {
+
         this.statusDot = document.getElementById('statusDot');
-        this.skillIndicator = document.getElementById('skillIndicator');
+        this.skillSelector = document.getElementById('skillSelector');
+        this.skillSelect = document.getElementById('skillSelect');
         this.settingsIndicator = document.getElementById('settingsIndicator'); // Optional
         this.micButton = document.getElementById('micButton');
-    this.infoButton = document.getElementById('infoButton');
-    this.shortcutsPopover = document.getElementById('shortcutsPopover');
+        this.infoButton = document.getElementById('infoButton');
+        this.shortcutsPopover = document.getElementById('shortcutsPopover');
+        this.screenshotButton = document.querySelector('.command-item i.fas.fa-camera')?.parentElement;
+        this.readButton = document.getElementById('readButton');
 
-        // NEW: Screenshot button is the first .command-item without id
-        const commandItems = document.querySelectorAll('.command-item');
-        this.screenshotButton = commandItems && commandItems[0];
-
-    if (!this.statusDot || !this.skillIndicator || !this.micButton || !this.screenshotButton) {
+        if (!this.statusDot || !this.skillSelector || !this.skillSelect || !this.micButton || !this.screenshotButton || !this.readButton) {
             throw new Error('Required UI elements not found');
         }
 
@@ -277,10 +482,23 @@ class MainWindowUI {
             }
         });
 
-        // Skill indicator click handler toggles DSA skill
-        this.skillIndicator.addEventListener('click', () => {
+        // Read button click handler (pure OCR, no AI/DSA logic)
+        this.readButton.addEventListener('click', () => {
             if (!this.isInteractive) return;
-            const newSkill = 'dsa';
+            this.readScreenAndShowText();
+        });
+
+        // Skill selector change handler
+        this.skillSelect.addEventListener('change', (event) => {
+            if (!this.isInteractive) return;
+            const newSkill = event.target.value;
+            // --- TEXT MODE: Capture screenshot, send to API, and display extracted text ---
+            if (newSkill === 'text') {
+                this.captureAndShowScreenText();
+                return; // Do not trigger any AI or DSA logic
+            }
+            // For all other skills, hide the text box and proceed as normal
+            this.hideScreenTextBox();
             if (window.electronAPI && window.electronAPI.updateActiveSkill) {
                 window.electronAPI.updateActiveSkill(newSkill).then(() => {
                     this.handleSkillActivated(newSkill);
@@ -288,7 +506,10 @@ class MainWindowUI {
             } else {
                 this.handleSkillActivated(newSkill);
             }
-        });
+
+// --- TEXT MODE: Capture screenshot, send to API, and display extracted text ---
+
+    });
 
         // Check for required elements (settingsIndicator is optional)
         if (this.settingsIndicator) {
@@ -301,12 +522,15 @@ class MainWindowUI {
 
         // Add click handler for microphone
         this.micButton.addEventListener('click', () => {
-            if (this.isInteractive) {
-                if (this.isRecording) {
-                    window.electronAPI.stopSpeechRecognition();
-                } else {
-                    window.electronAPI.startSpeechRecognition();
-                }
+            if (!this.isInteractive) {
+                return; // Don't do anything if not interactive
+            }
+            
+            // Speech is available, toggle recording
+            if (this.isRecording) {
+                window.electronAPI.stopSpeechRecognition();
+            } else {
+                window.electronAPI.startSpeechRecognition();
             }
         });
 
@@ -564,14 +788,14 @@ class MainWindowUI {
             this.hideShortcutsPopover();
         }
         
-        // Update skill indicator tooltip
-        this.updateSkillIndicator();
+        // Update skill selector tooltip
+        this.updateSkillSelector();
         
         logger.info('Interaction mode change completed', {
             component: 'MainWindowUI',
             interactive: this.isInteractive,
             statusDotClass: this.statusDot ? this.statusDot.className : 'not found',
-            skillIndicatorClass: this.skillIndicator ? this.skillIndicator.className : 'not found'
+            skillSelectorClass: this.skillSelector ? this.skillSelector.className : 'not found'
         });
     }
 
@@ -583,10 +807,10 @@ class MainWindowUI {
             component: 'MainWindowUI',
             oldSkill: oldSkill,
             newSkill: data.skill,
-            skillIndicatorExists: !!this.skillIndicator
+            skillSelectorExists: !!this.skillSelector
         });
         
-        this.updateSkillIndicator();
+        this.updateSkillSelector();
         
         logger.info('Skill changed successfully', {
             component: 'MainWindowUI',
@@ -596,13 +820,15 @@ class MainWindowUI {
 
     handleSkillActivated(skillName) {
         this.currentSkill = skillName;
-        this.updateSkillIndicator();
+        this.updateSkillSelector();
         
         logger.info('Skill activated', {
             component: 'MainWindowUI',
             skill: skillName
         });
     }
+
+
 
     handleScreenshotRequest() {
         logger.debug('Screenshot request received', { component: 'MainWindowUI' });
@@ -612,21 +838,74 @@ class MainWindowUI {
         this.isRecording = true;
         if (this.micButton) {
             this.micButton.classList.add('recording');
+            this.micButton.title = '🔴 LISTENING... Click to stop or just start speaking!';
         }
-        logger.debug('Recording started', { component: 'MainWindowUI' });
+        
+        // Show listening indicator
+        this.showListeningIndicator();
+        
+        logger.debug('🎤 Voice recording started - ready for questions!', { component: 'MainWindowUI' });
     }
 
     handleRecordingStopped() {
         this.isRecording = false;
         if (this.micButton) {
             this.micButton.classList.remove('recording');
+            this.micButton.title = '🎤 Voice recognition ready! Click to start listening for questions';
         }
-        logger.debug('Recording stopped', { component: 'MainWindowUI' });
+        
+        // Hide listening indicator
+        this.hideListeningIndicator();
+        
+        logger.debug('🔇 Voice recording stopped', { component: 'MainWindowUI' });
     }
 
-    updateSkillIndicator() {
+    showListeningIndicator() {
+        // Create or update listening indicator
+        let indicator = document.getElementById('listeningIndicator');
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.id = 'listeningIndicator';
+            indicator.style.cssText = `
+                position: fixed;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: linear-gradient(135deg, rgba(76, 175, 80, 0.9) 0%, rgba(56, 142, 60, 0.95) 100%);
+                backdrop-filter: blur(10px);
+                color: white;
+                padding: 8px 16px;
+                border-radius: 20px;
+                font-size: 11px;
+                font-weight: 600;
+                z-index: 10000;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+                animation: pulse 2s infinite;
+            `;
+            document.body.appendChild(indicator);
+        }
+        
+        indicator.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="width: 8px; height: 8px; background: #ff4757; border-radius: 50%; animation: blink 1s infinite;"></div>
+                <span>🎤 Listening for your question...</span>
+            </div>
+        `;
+        indicator.style.display = 'block';
+    }
+
+    hideListeningIndicator() {
+        const indicator = document.getElementById('listeningIndicator');
+        if (indicator) {
+            indicator.style.display = 'none';
+        }
+    }
+
+    updateSkillSelector() {
         const skillNames = {
             'dsa': 'DSA',
+            'mcq': 'MCQ',
             'behavioral': 'Behavioral', 
             'sales': 'Sales',
             'presentation': 'Presentation',
@@ -637,56 +916,62 @@ class MainWindowUI {
             'negotiation': 'Negotiation'
         };
         
-        logger.info('Updating skill indicator', {
+        logger.info('Updating skill selector', {
             component: 'MainWindowUI',
             currentSkill: this.currentSkill,
-            skillIndicatorExists: !!this.skillIndicator
+            skillSelectorExists: !!this.skillSelector,
+            skillSelectExists: !!this.skillSelect
         });
         
-        if (!this.skillIndicator) {
-            logger.error('Skill indicator element not found!');
+        if (!this.skillSelect) {
+            logger.error('Skill select element not found!');
             return;
         }
         
-        const skillName = skillNames[this.currentSkill] || this.currentSkill.toUpperCase();
-        const skillSpan = this.skillIndicator.querySelector('span');
-        
-        logger.info('Looking for skill span element', {
+        // Update the selected value in the dropdown
+        if (this.skillSelect.value !== this.currentSkill) {
+            this.skillSelect.value = this.currentSkill;
+            // Force UI update in case browser doesn't reflect change
+            this.skillSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        logger.info('[updateSkillSelector] Set dropdown to:', this.currentSkill, 'Dropdown value:', this.skillSelect.value);
+        // Enable/disable coding language selector based on skill
+        this.updateCodingLanguageSelector();
+        logger.info('Skill selector updated successfully', {
             component: 'MainWindowUI',
-            spanExists: !!skillSpan,
-            skillName: skillName
+            selectedSkill: this.currentSkill,
+            selectorValue: this.skillSelect.value
         });
+        // Add visual feedback for skill change
+        this.animateSkillChange();
+    }
+    
+    updateCodingLanguageSelector() {
+        // Skills that require programming language selection
+        const skillsRequiringLanguage = ['dsa'];
+        const requiresLanguage = skillsRequiringLanguage.includes(this.currentSkill);
         
-        if (skillSpan) {
-            const oldText = skillSpan.textContent;
-            skillSpan.textContent = skillName;
-                        
-            const tooltip = this.isInteractive ? 
-                `${skillName} - Use ⌘↑/↓ to navigate skills` : 
-                `${skillName} - Enable interactive mode (Alt+A) to navigate`;
-            this.skillIndicator.title = tooltip;
-            
-            // Add visual feedback for skill change
-            this.animateSkillChange();
-            
-            logger.info('Skill indicator updated successfully', {
-                component: 'MainWindowUI',
-                oldText: oldText,
-                newText: skillName,
-                interactive: this.isInteractive
-            });
-        } else {
-            logger.error('Skill span element not found within skill indicator!');
+        if (this.codingLanguageSelect) {
+            const languageSelector = document.getElementById('languageSelector');
+            if (languageSelector) {
+                if (requiresLanguage) {
+                    languageSelector.style.display = 'flex';
+                    this.codingLanguageSelect.disabled = false;
+                } else {
+                    languageSelector.style.display = 'none';
+                    this.codingLanguageSelect.disabled = true;
+                }
+            }
         }
     }
 
     animateSkillChange() {
-        if (this.skillIndicator) {
-            this.skillIndicator.style.transform = 'scale(1.1)';
-            this.skillIndicator.style.transition = 'transform 0.2s ease';
+        if (this.skillSelector) {
+            this.skillSelector.style.transform = 'scale(1.1)';
+            this.skillSelector.style.transition = 'transform 0.2s ease';
             
             setTimeout(() => {
-                this.skillIndicator.style.transform = 'scale(1)';
+                this.skillSelector.style.transform = 'scale(1)';
             }, 200);
         }
     }
@@ -715,7 +1000,7 @@ class MainWindowUI {
         
         // Update skill locally and notify main process
         this.currentSkill = newSkill;
-        this.updateSkillIndicator();
+        this.updateSkillSelector();
         
         // Save the skill change via IPC
         if (window.electronAPI && window.electronAPI.updateActiveSkill) {
@@ -866,6 +1151,47 @@ class MainWindowUI {
             component: 'MainWindowUI',
             message,
             type
+        });
+    }
+
+    showSpeechUnavailableNotification() {
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, rgba(255, 152, 0, 0.9) 0%, rgba(255, 193, 7, 0.95) 100%);
+            backdrop-filter: blur(10px);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            z-index: 10000;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        `;
+        notification.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <i class="fas fa-microphone" style="font-size: 14px;"></i>
+                <span>🎤 Voice recognition is loading...</span>
+            </div>
+            <div style="font-size: 10px; opacity: 0.9; margin-top: 4px;">
+                Web Speech API is initializing. Please try again in a moment.
+            </div>
+        `;
+        
+        document.body.appendChild(notification);
+        
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.parentNode.removeChild(notification);
+            }
+        }, 4000);
+        
+        logger.debug('Speech unavailable notification shown', {
+            component: 'MainWindowUI'
         });
     }
 
@@ -1130,9 +1456,26 @@ class MainWindowUI {
         if (this._popoverHideTimeout) clearTimeout(this._popoverHideTimeout);
         this._popoverHideTimeout = setTimeout(() => this.hideShortcutsPopover(), 180);
     }
+
+
+
+async copyScreenTextToClipboard(text) {
+    if (!text) return;
+    if (navigator && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try {
+            await navigator.clipboard.writeText(text);
+            this.showNotification('Text copied to clipboard!', 'success');
+        } catch (err) {
+            this.showNotification('Failed to copy text: ' + (err?.message || err), 'error');
+        }
+    } else {
+        this.showNotification('Clipboard API not supported in this environment.', 'error');
+    }
 }
 
 // Initialize when DOM is ready
+}
+
 let mainWindowUI;
 if (typeof document !== 'undefined') {
     // Add immediate visual indicator that script is loading

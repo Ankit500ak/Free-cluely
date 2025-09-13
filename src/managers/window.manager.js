@@ -1176,6 +1176,11 @@ class WindowManager {
     }
   }
 
+  // Alias for voice question processing
+  showLLMResponseLoading() {
+    this.showLLMLoading();
+  }
+
   hideLLMResponse() {
     const llmWindow = this.windows.get('llmResponse');
     if (llmWindow) {
@@ -1298,6 +1303,20 @@ class WindowManager {
       dataPreview: data && data.content ? data.content.substring(0, 50) + '...' : 
                    data && data.response ? data.response.substring(0, 50) + '...' : 'No response'
     });
+  }
+
+  // Send message to renderer process (for Web Speech API)
+  sendToRenderer(channel, data) {
+    const mainWindow = this.windows.get('main');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (channel === 'start-web-speech' || channel === 'stop-web-speech') {
+        // Send Web Speech API specific messages
+        mainWindow.webContents.send('main-to-renderer', { event: channel, data });
+      } else {
+        mainWindow.webContents.send(channel, data);
+      }
+      logger.debug('Message sent to renderer', { channel, hasData: !!data });
+    }
   }
 
   getWindow(type) {
@@ -1632,6 +1651,55 @@ class WindowManager {
       windowCount: this.windows.size 
     });
     }
+}
+
+// Enhanced logic to ensure full-screen mode and focus retention
+const enforceFullScreenAndFocus = (window) => {
+  const maintainFocus = () => {
+    if (!window.isFocused()) {
+      window.focus();
+    }
+  };
+
+  const maintainFullScreen = () => {
+    if (!window.isFullScreen()) {
+      window.setFullScreen(true);
+    }
+  };
+
+  window.on('blur', () => {
+    setTimeout(() => {
+      maintainFocus();
+      maintainFullScreen();
+    }, 50);
+  });
+
+  window.on('leave-full-screen', () => {
+    setTimeout(() => {
+      maintainFullScreen();
+    }, 50);
+  });
+
+  window.on('resize', () => {
+    setTimeout(() => {
+      maintainFullScreen();
+    }, 50);
+  });
+
+  // Initial enforcement
+  maintainFocus();
+  maintainFullScreen();
+};
+
+// Apply enhanced logic to all windows with a safety check
+if (this.windows && this.windows instanceof Map) {
+  this.windows.forEach((window) => {
+    if (!window.isDestroyed()) {
+      enforceFullScreenAndFocus(window);
+    }
+  });
+} else {
+  logger.error('WindowManager: `this.windows` is not initialized or is not a Map.');
 }
 
 module.exports = new WindowManager();

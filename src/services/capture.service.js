@@ -1,7 +1,18 @@
 const { desktopCapturer, screen } = require('electron');
 const logger = require('../core/logger').createServiceLogger('CAPTURE');
 
+const ocrService = require('./ocr.service');
+
 class CaptureService {
+  /**
+   * Extract text from an image buffer using OCR (Tesseract.js)
+   * @param {Buffer} imageBuffer
+   * @param {string} mimeType
+   * @returns {Promise<string>} Extracted text
+   */
+  async extractTextFromImage(imageBuffer, mimeType = 'image/png') {
+    return ocrService.extractTextFromImage(imageBuffer, mimeType);
+  }
   constructor() {
     this.isProcessing = false;
   }
@@ -32,7 +43,7 @@ class CaptureService {
     this.isProcessing = true;
     const startTime = Date.now();
     try {
-      const { image, metadata } = await this.captureScreenshot(options);
+  const { image, metadata } = await this.captureScreenshot(options);
 
       // Crop if area specified
       let finalImage = image;
@@ -57,6 +68,7 @@ class CaptureService {
           timestamp: new Date().toISOString(),
           source: metadata,
           processingTime: Date.now() - startTime
+        , options: options
         }
       };
     } finally {
@@ -68,9 +80,15 @@ class CaptureService {
     const targetDisplay = this._getTargetDisplay(options.displayId);
     const { width, height } = targetDisplay.size || { width: 1920, height: 1080 };
 
+    // Request a larger thumbnail size for better OCR accuracy. Use scale factor and optional multiplier.
+    const scale = options.scaleMultiplier || 2; // default to 2x
+    const scaleFactor = targetDisplay.scaleFactor || 1;
+    const thumbWidth = Math.max(1, Math.round(width * scaleFactor * scale));
+    const thumbHeight = Math.max(1, Math.round(height * scaleFactor * scale));
+
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
-      thumbnailSize: { width, height }
+      thumbnailSize: { width: thumbWidth, height: thumbHeight }
     });
 
     if (sources.length === 0) {

@@ -3,13 +3,17 @@ const { contextBridge, ipcRenderer } = require('electron')
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
-  // Screenshot and OCR
-  takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
+  // Screenshot and OCR (accept optional options, e.g. { skill: 'text' })
+  takeScreenshot: (options) => ipcRenderer.invoke('take-screenshot', options),
   
   // Speech recognition
   startSpeechRecognition: () => ipcRenderer.invoke('start-speech-recognition'),
   stopSpeechRecognition: () => ipcRenderer.invoke('stop-speech-recognition'),
   getSpeechAvailability: () => ipcRenderer.invoke('get-speech-availability'),
+  
+  // Web Speech API communication
+  sendToMain: (event, data) => ipcRenderer.send('web-speech-message', { event, data }),
+  onMainMessage: (callback) => ipcRenderer.on('main-to-renderer', (event, data) => callback(data.event, data.data)),
   
   // Window management
   showAllWindows: () => ipcRenderer.invoke('show-all-windows'),
