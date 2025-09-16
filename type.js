@@ -108,7 +108,7 @@ class TypingSimulator extends EventEmitter {
         return new Promise((resolve, reject) => {
             let psKey = token;
             if (psKey === '\n') psKey = '{ENTER}';
-            else if (psKey === '\t') psKey = '{TAB}';
+            else if (psKey === '\t') psKey = '{TABe}';
             else if (psKey === '\r') return resolve();
             else if (psKey === ' ') psKey = ' ';
             // Escape single quote for PowerShell
@@ -117,10 +117,15 @@ class TypingSimulator extends EventEmitter {
             const command = `powershell -NoProfile -WindowStyle Hidden -Command \"${psCmd.replace(/\"/g, '\\\"')}\"`;
             require('child_process').exec(command, { shell: true }, (err) => {
                 if (err) {
-                    console.error(`[TypingSimulator] Error typing token '${token}':`, err);
-                    return reject(err);
+                    // Fallback: try to type a single quote (SendKeys syntax is two single quotes)
+                    const fallbackCmd = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait(''\'');`;
+                    require('child_process').exec(`powershell -NoProfile -WindowStyle Hidden -Command \"${fallbackCmd}\"`, { shell: true }, () => {
+                        console.error(`[TypingSimulator] Error typing token '${token}', replaced with fallback single quote:`, err);
+                        return resolve();
+                    });
+                } else {
+                    resolve();
                 }
-                resolve();
             });
         });
     }

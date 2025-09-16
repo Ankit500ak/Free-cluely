@@ -515,9 +515,52 @@ class ApplicationController {
         });
 
         ipcMain.handle("update-active-skill", (event, skill) => {
-            this.activeSkill = skill;
-            windowManager.broadcastToAllWindows("skill-changed", { skill });
-            return { success: true };
+            // Normalize and map aliases
+            const normalize = (input) => {
+                let v = input;
+                if (v && typeof v === "object") v = v.skill ?? v.name ?? v.value ?? "";
+                v = String(v ?? "").trim().toLowerCase();
+                const aliases = {
+                    "mcq-mode": "mcq",
+                    "mcqmode": "mcq",
+                    "multiple-choice": "mcq",
+                    "multiplechoice": "mcq",
+                    "multiple choice": "mcq",
+                    "m-c-q": "mcq",
+                    "choice": "mcq",
+                };
+                return aliases[v] ?? v;
+            };
+
+            const normalized = normalize(skill);
+            if (!normalized) {
+                logger.warn("Empty or invalid skill received in update-active-skill", { received: skill });
+                return { success: false, error: "empty or invalid skill", received: skill };
+            }
+
+            // Accept only known skills
+            if (!availableSkills.includes(normalized)) {
+                logger.warn("Unknown skill requested", { requested: normalized, availableSkills });
+                return { success: false, error: "unknown skill", requested: normalized };
+            }
+
+            // Persist and notify
+            this.activeSkill = normalized;
+            try { sessionManager.setActiveSkill(this.activeSkill); } catch (e) {}
+            try { if (typeof llmService.setActiveSkill === "function") llmService.setActiveSkill(this.activeSkill); } catch (e) {}
+
+            // Broadcast to renderers and provide explicit activation channels
+            windowManager.broadcastToAllWindows("skill-changed", { skill: this.activeSkill });
+            windowManager.broadcastToAllWindows("skill-updated", { skill: this.activeSkill });
+            windowManager.broadcastToAllWindows("skill-activated", { skill: this.activeSkill });
+            if (this.activeSkill === "mcq") {
+                windowManager.broadcastToAllWindows("mcq-activated", { skill: "mcq" });
+            }
+
+            logger.info("Active skill updated via IPC handle", { original: skill, normalized: this.activeSkill });
+            console.log(`skill update received -> original: ${JSON.stringify(skill)}, normalized: ${this.activeSkill}`);
+
+            return { success: true, activeSkill: this.activeSkill };
         });
 
         ipcMain.handle("restart-app-for-stealth", () => {
@@ -577,9 +620,51 @@ class ApplicationController {
         });
 
         ipcMain.on("update-skill", (event, skill) => {
-            this.activeSkill = skill;
-            windowManager.broadcastToAllWindows("skill-updated", { skill });
-        });
+            // Normalize and map aliases (same logic as handle)
+            const normalize = (input) => {
+                let v = input;
+                if (v && typeof v === "object") v = v.skill ?? v.name ?? v.value ?? "";
+                v = String(v ?? "").trim().toLowerCase();
+                const aliases = {
+                    "mcq-mode": "mcq",
+                    "mcqmode": "mcq",
+                    "multiple-choice": "mcq",
+                    "multiplechoice": "mcq",
+                    "multiple choice": "mcq",
+                    "m-c-q": "mcq",
+                    "choice": "mcq",
+                };
+                return aliases[v] ?? v;
+            };
+
+            const normalized = normalize(skill);
+            if (!normalized) {
+                logger.warn("Empty or invalid skill received in update-skill event", { received: skill });
+                event?.reply?.("skill-update-ack", { success: false, error: "empty or invalid", received: skill });
+                return;
+            }
+
+            if (!availableSkills.includes(normalized)) {
+                logger.warn("Unknown skill requested (event)", { requested: normalized, availableSkills });
+                event?.reply?.("skill-update-ack", { success: false, error: "unknown skill", requested: normalized });
+                return;
+            }
+
+            // Persist and notify
+            this.activeSkill = normalized;
+            try { sessionManager.setActiveSkill(this.activeSkill); } catch (e) {}
+            try { if (typeof llmService.setActiveSkill === "function") llmService.setActiveSkill(this.activeSkill); } catch (e) {}
+
+            windowManager.broadcastToAllWindows("skill-updated", { skill: this.activeSkill });
+            windowManager.broadcastToAllWindows("skill-activated", { skill: this.activeSkill });
+            if (this.activeSkill === "mcq") windowManager.broadcastToAllWindows("mcq-activated", { skill: "mcq" });
+
+            logger.info("Active skill updated via IPC event", { original: skill, normalized: this.activeSkill });
+            console.log(`skill event received -> original: ${JSON.stringify(skill)}, normalized: ${this.activeSkill}`);
+
+            // Acknowledge back to sender so renderer knows activation succeeded
+            event?.reply?.("skill-update-ack", { success: true, activeSkill: this.activeSkill });
+         });
 
         ipcMain.on("quit-app", () => {
             logger.info("Quit app requested via IPC (on method)");

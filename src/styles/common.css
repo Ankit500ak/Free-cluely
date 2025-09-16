@@ -7,15 +7,17 @@
 body {
     background: transparent !important;
     margin: 0;
+    width: 100%;
     padding: 0;
-    overflow: hidden;
+    overflow-x: scroll;
+    overflow-y: hidden;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     cursor: default;
 }
 
 /* Common container styles */
 .app-container {
-    width: 100%;
+    
     height: 100vh;
     display: flex;
     flex-direction: column;
@@ -25,6 +27,13 @@ body {
     border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 4px 25px rgba(0, 0, 0, 0.15);
+    /* increased width limits so UI and tabs have more room on larger screens */
+    max-width: 1400px;
+    width: 1200px;
+    min-width: 900px;
+    margin: 0 auto;
+    padding-left: 8px;
+    padding-right: 8px;
 }
 
 /* Header styles */
@@ -199,6 +208,8 @@ body {
     cursor: pointer;
     position: relative;
     overflow: hidden;
+    /* allow cards to grow wider on large screens */
+    max-width: 1200px;
 }
 
 .card:hover {
@@ -367,7 +378,8 @@ body {
     word-break: break-word;
     white-space: pre-wrap;
     overflow-wrap: break-word;
-    max-width: 100%;
+    /* increase max width for message content */
+    max-width: 1200px;
     display: block;
 }
 
@@ -517,7 +529,7 @@ body {
 .opacity-90 { opacity: 0.9; }
 
 /* Responsive design helpers */
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
     .app-header {
         padding: 8px 12px;
     }
@@ -532,6 +544,7 @@ body {
     
     .card {
         padding: 10px 12px;
+        max-width: 100%;
     }
 }
 

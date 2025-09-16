@@ -1,0 +1,203 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Reasoning — Stealth AI</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+	:root{
+		--bg:#0f1720;--panel:#0b1220;--muted:#9aa6b2;--accent:#60a5fa;
+		--card:#0b1320;--success:#34d399;--danger:#fb7185;
+		font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+	}
+	html,body{height:100%;margin:0;background:linear-gradient(180deg,#071020 0%, #071826 100%);color:#e6eef6}
+	.container{max-width:1100px;margin:28px auto;padding:20px;}
+	.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+	.title{font-size:20px;font-weight:600}
+	.controls{display:flex;gap:10px;align-items:center}
+	.btn{background:var(--accent);color:#041024;padding:8px 12px;border-radius:8px;border:none;cursor:pointer;font-weight:600}
+	.btn.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+	.area{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+	.panel{background:var(--panel);padding:14px;border-radius:10px;box-shadow:0 6px 18px rgba(2,6,23,.6);min-height:220px}
+	.input-area textarea{width:100%;height:170px;background:#041022;border-radius:8px;border:1px solid rgba(255,255,255,0.04);color:#e6eef6;padding:12px;font-size:13px;resize:vertical}
+	.meta{display:flex;gap:8px;align-items:center;margin-top:8px;color:var(--muted);font-size:12px}
+	.result-section{display:flex;flex-direction:column;gap:10px}
+	.section{background:var(--card);padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.02)}
+	.section h3{margin:0 0 8px 0;font-size:13px;color:var(--muted);font-weight:600}
+	.section p{margin:0;color:#dbeafe;white-space:pre-wrap;font-size:14px;line-height:1.45}
+	.small-actions{display:flex;gap:8px;margin-top:10px}
+	.kv{font-size:12px;color:var(--muted)}
+	.footer-note{margin-top:10px;color:var(--muted);font-size:12px}
+	.loader{height:6px;background:linear-gradient(90deg, rgba(255,255,255,0.06), rgba(255,255,255,0.12));border-radius:6px;overflow:hidden}
+	.loader .bar{height:100%;width:0;background:linear-gradient(90deg,var(--accent),#7dd3fc);animation:progress 1.6s linear infinite}
+	@keyframes progress{0%{width:0}50%{width:60%}100%{width:0}}
+	.copy{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted);padding:6px 8px;border-radius:6px;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="container">
+	<div class="header">
+		<div class="title">Reasoning — Approach & Answer</div>
+		<div class="controls">
+			<button id="loadTemplate" class="btn ghost">Load Template</button>
+			<button id="submitBtn" class="btn">Run</button>
+		</div>
+	</div>
+
+	<div class="area">
+		<div class="panel input-area">
+			<label class="kv">Prompt</label>
+			<textarea id="promptInput" placeholder="Paste the problem here..."></textarea>
+			<div class="meta">
+				<div class="kv" id="charCount">0 chars</div>
+				<div style="flex:1"></div>
+				<button id="clearBtn" class="copy">Clear</button>
+			</div>
+			<div class="footer-note">Tip: ask model to include "Approach:" and "Answer:" markers for best parsing.</div>
+		</div>
+
+		<div class="panel result-section">
+			<div id="statusBox" class="section">
+				<div id="statusText" class="kv">No result yet</div>
+				<div id="progress" style="margin-top:8px;display:none" class="loader"><div class="bar"></div></div>
+			</div>
+
+			<div id="approachCard" class="section" style="display:none">
+				<h3>Approach</h3>
+				<p id="approachText"></p>
+				<div class="small-actions">
+					<button class="copy" data-target="approachText">Copy Approach</button>
+				</div>
+			</div>
+
+			<div id="answerCard" class="section" style="display:none">
+				<h3>Answer</h3>
+				<p id="answerText"></p>
+				<div class="small-actions">
+					<button class="copy" data-target="answerText">Copy Answer</button>
+				</div>
+			</div>
+
+			<div id="fullCard" class="section" style="display:none">
+				<h3>Full model response</h3>
+				<p id="fullText" style="max-height:160px;overflow:auto"></p>
+			</div>
+		</div>
+	</div>
+</div>
+
+<script>
+	// renderer script - requires nodeIntegration or preload exposing ipcRenderer
+	// Try both: window.ipcRenderer (preload) or require('electron').ipcRenderer
+	const ipc = (window.ipcRenderer) ? window.ipcRenderer : (window.require ? window.require('electron').ipcRenderer : null);
+	if (!ipc) {
+		document.getElementById('statusText').textContent = 'IPC not available. Enable nodeIntegration or expose ipcRenderer via preload.';
+	}
+
+	const promptInput = document.getElementById('promptInput');
+	const submitBtn = document.getElementById('submitBtn');
+	const loadTemplate = document.getElementById('loadTemplate');
+	const clearBtn = document.getElementById('clearBtn');
+	const charCount = document.getElementById('charCount');
+	const statusText = document.getElementById('statusText');
+	const progress = document.getElementById('progress');
+
+	const approachCard = document.getElementById('approachCard');
+	const answerCard = document.getElementById('answerCard');
+	const fullCard = document.getElementById('fullCard');
+
+	const approachText = document.getElementById('approachText');
+	const answerText = document.getElementById('answerText');
+	const fullText = document.getElementById('fullText');
+
+	function setLoading(on) {
+		progress.style.display = on ? 'block' : 'none';
+		statusText.textContent = on ? 'Processing...' : 'Idle';
+	}
+
+	promptInput.addEventListener('input', ()=> {
+		charCount.textContent = `${promptInput.value.length} chars`;
+	});
+
+	clearBtn.addEventListener('click', ()=> {
+		promptInput.value = '';
+		charCount.textContent = '0 chars';
+		approachCard.style.display = 'none';
+		answerCard.style.display = 'none';
+		fullCard.style.display = 'none';
+	});
+
+	loadTemplate.addEventListener('click', async ()=> {
+		if (!ipc) return;
+		try {
+			const tmpl = await ipc.invoke('get-reasoning-prompt');
+			if (tmpl) {
+				promptInput.value = tmpl;
+				charCount.textContent = `${promptInput.value.length} chars`;
+			}
+		} catch (e) {
+			console.error(e);
+		}
+	});
+
+	submitBtn.addEventListener('click', async ()=> {
+		if (!ipc) return;
+		const prompt = promptInput.value.trim();
+		if (!prompt) {
+			statusText.textContent = 'Enter a prompt first.';
+			return;
+		}
+		setLoading(true);
+		try {
+			// invoke submit; main will broadcast reasoning-response as well, but we await result
+			const res = await ipc.invoke('submit-reasoning-prompt', { prompt });
+			if (res && res.success) {
+				renderResult(res);
+			} else {
+				statusText.textContent = `Error: ${res?.error || 'unknown'}`;
+			}
+		} catch (e) {
+			statusText.textContent = 'Submission failed.';
+			console.error(e);
+		} finally {
+			setLoading(false);
+		}
+	});
+
+	// Listen to broadcasts (if main triggers windowManager.broadcastToAllWindows)
+	if (ipc) {
+		ipc.on && ipc.on('reasoning-response', (event, payload) => {
+			// if payload is sent via broadcast, event param may differ depending on preload
+			const data = (payload && payload.prompt) ? payload : (event && event.prompt) ? event : payload;
+			if (data) renderResult(data);
+		});
+	}
+
+	function renderResult(data) {
+		approachText.textContent = data.approach || '(no approach provided)';
+		answerText.textContent = data.answer || '(no answer parsed)';
+		fullText.textContent = data.full || '';
+		approachCard.style.display = 'block';
+		answerCard.style.display = 'block';
+		fullCard.style.display = 'block';
+		statusText.textContent = 'Result ready';
+	}
+
+	// copy buttons
+	document.addEventListener('click', (e)=>{
+		const btn = e.target.closest('button.copy');
+		if (!btn) return;
+		const targetId = btn.getAttribute('data-target');
+		const txt = (targetId && document.getElementById(targetId)) ? document.getElementById(targetId).textContent : '';
+		if (!txt) return;
+		if (navigator.clipboard && navigator.clipboard.writeText) {
+			navigator.clipboard.writeText(txt);
+		} else {
+			try {
+				const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+			} catch (e) {}
+		}
+	});
+</script>
+</body>
+</html>

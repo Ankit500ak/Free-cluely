@@ -1,4 +1,4 @@
-// create-shortcut.js
+p// create-shortcut.js
 // Requires: npm install windows-shortcuts
 const ws = require('windows-shortcuts');
 const path = require('path');
